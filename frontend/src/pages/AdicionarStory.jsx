@@ -16,6 +16,7 @@ import {
   Plus,
   X,
   Music2,
+  Pencil,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -34,7 +35,10 @@ export default function AdicionarStory() {
   const [title, setTitle] = useState("");
   const [format, setFormat] = useState("widget");
   const [scroll, setScroll] = useState("vertical");
-  const [aparencia, setAparencia] = useState("padrao");
+  const [aparencia, setAparencia] = useState("padrao-1");
+  const [aparenciaOptions, setAparenciaOptions] = useState([
+    { value: "padrao-1", label: "Padrão 1" },
+  ]);
   const [active, setActive] = useState(true);
   const [cta, setCta] = useState("");
   const [media, setMedia] = useState([]);
@@ -184,18 +188,39 @@ export default function AdicionarStory() {
 
         {/* Aparência */}
         <section className="bg-white border border-neutral-200 rounded-2xl p-6">
-          <Label>Selecionar aparência</Label>
-          <Select value={aparencia} onValueChange={setAparencia}>
-            <SelectTrigger className="h-11 rounded-xl border-neutral-200"><SelectValue/></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="padrao">Aparência padrão</SelectItem>
-              <SelectItem value="minimal">Minimal</SelectItem>
-              <SelectItem value="circular">Circular</SelectItem>
-              <SelectItem value="quadrada">Quadrada</SelectItem>
-              <SelectItem value="destaque">Destaque (com sombra)</SelectItem>
-            </SelectContent>
-          </Select>
-          <p className="text-[12.5px] text-neutral-500 mt-2">Defina o estilo visual do widget que aparecerá na sua loja.</p>
+          <Label>Aparência</Label>
+          <div className="flex items-center gap-3">
+            <Select value={aparencia} onValueChange={setAparencia}>
+              <SelectTrigger className="flex-1 h-11 rounded-xl border-neutral-200"><SelectValue/></SelectTrigger>
+              <SelectContent>
+                {aparenciaOptions.map((o) => (
+                  <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <button
+              type="button"
+              onClick={() => {
+                const next = aparenciaOptions.length + 1;
+                const newOpt = { value: `padrao-${next}`, label: `Padrão ${next}` };
+                setAparenciaOptions([...aparenciaOptions, newOpt]);
+                setAparencia(newOpt.value);
+                toast.success(`Aparência "${newOpt.label}" criada`);
+              }}
+              title="Adicionar aparência"
+              className="w-11 h-11 rounded-full bg-neutral-900 text-white flex items-center justify-center hover:bg-neutral-800 transition-colors shrink-0"
+            >
+              <Plus className="w-4 h-4" strokeWidth={2.25} />
+            </button>
+            <button
+              type="button"
+              onClick={() => toast.message("Editar aparência", { description: "Em breve você editará cores, formato e bordas." })}
+              title="Editar aparência"
+              className="w-11 h-11 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center hover:bg-amber-200 transition-colors shrink-0 ring-1 ring-amber-200"
+            >
+              <Pencil className="w-4 h-4" strokeWidth={2} />
+            </button>
+          </div>
         </section>
 
         {/* Active */}
