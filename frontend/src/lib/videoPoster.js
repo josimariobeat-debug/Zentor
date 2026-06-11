@@ -7,7 +7,8 @@ export function generateVideoPoster(videoUrl, opts = {}) {
 
   return new Promise((resolve, reject) => {
     const v = document.createElement("video");
-    v.crossOrigin = "anonymous";
+    // Don't set crossOrigin for same-origin videos — it forces a stricter CORS check
+    // that can cause canvas tainting even on identical origins in some browsers.
     v.preload = "auto";
     v.muted = true;
     v.playsInline = true;

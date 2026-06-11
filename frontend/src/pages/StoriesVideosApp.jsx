@@ -135,19 +135,26 @@ export default function StoriesVideosApp() {
                   >
                     <div className="w-14 h-20 rounded-lg overflow-hidden bg-neutral-100 relative shrink-0">
                       {s.thumbnail ? (
-                        <>
-                          <img src={s.thumbnail} alt="" className="w-full h-full object-cover"/>
-                          {(s.media?.[0]?.type === "video" || s.media?.find(m=>m.cover)?.type === "video") && (
-                            <div className="absolute inset-0 flex items-center justify-center bg-black/15">
-                              <div className="w-7 h-7 rounded-full bg-white/95 flex items-center justify-center">
-                                <Play className="w-3.5 h-3.5 fill-neutral-900 ml-0.5" strokeWidth={0}/>
-                              </div>
-                            </div>
-                          )}
-                        </>
+                        <img src={s.thumbnail} alt="" className="w-full h-full object-cover"/>
+                      ) : s.cover_url && s.cover_type === "video" ? (
+                        <video
+                          src={`${s.cover_url}#t=0.1`}
+                          className="w-full h-full object-cover"
+                          muted
+                          playsInline
+                          preload="auto"
+                          onLoadedMetadata={(e)=>{try{e.target.currentTime=0.1;}catch{}}}
+                        />
                       ) : (
                         <div className="w-full h-full flex items-center justify-center">
                           <Play className="w-5 h-5 fill-neutral-400 text-neutral-400" strokeWidth={0}/>
+                        </div>
+                      )}
+                      {s.cover_type === "video" && (s.thumbnail || s.cover_url) && (
+                        <div className="absolute inset-0 flex items-center justify-center bg-black/15 pointer-events-none">
+                          <div className="w-7 h-7 rounded-full bg-white/95 flex items-center justify-center shadow">
+                            <Play className="w-3.5 h-3.5 fill-neutral-900 ml-0.5" strokeWidth={0}/>
+                          </div>
                         </div>
                       )}
                     </div>

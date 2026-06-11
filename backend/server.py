@@ -7,6 +7,8 @@ import os
 import logging
 import base64
 import uuid
+import subprocess
+import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from pydantic import BaseModel, EmailStr, Field
@@ -240,14 +242,21 @@ def _story_out(s: dict) -> dict:
     media_list = s.get("media", []) or []
     cover = next((m for m in media_list if m.get("cover")), media_list[0] if media_list else None)
     thumbnail = None
+    cover_url = None
+    cover_type = "image"
     if cover:
-        thumbnail = cover.get("poster") or (cover.get("url") if cover.get("type") != "video" else None)
+        cover_url = cover.get("url")
+        cover_type = cover.get("type", "image")
+        # Prefer poster (still image) for thumbnail; otherwise use url only if not video
+        thumbnail = cover.get("poster") or (cover_url if cover_type != "video" else None)
     return {
         "id": s["id"], "app_id": s["app_id"], "title": s["title"],
         "format": s.get("format", "vertical"), "scroll": s.get("scroll", "auto"),
         "active": s.get("active", True), "cta": s.get("cta", ""),
         "media": media_list, "urls": s.get("urls", []),
         "thumbnail": thumbnail,
+        "cover_url": cover_url,
+        "cover_type": cover_type,
         "views": s.get("views", 0),
         "created_at": s.get("created_at"),
     }
@@ -312,18 +321,44 @@ async def toggle_story(sid: str, user=Depends(get_current_user)):
     return {"active": new_active}
 
 # -------- Uploads (stored as base64 in MongoDB) --------
-MAX_UPLOAD = 20 * 1024 * 1024  # 20 MB
+MAX_UPLOAD = 50 * 1024 * 1024  # 50 MB
+
+def _extract_video_poster(video_bytes: bytes) -> Optional[bytes]:
+    """Extract a poster JPEG from a video using ffmpeg. Returns None on failure."""
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as fin:
+            fin.write(video_bytes)
+            in_path = fin.name
+        out_path = in_path + ".jpg"
+        # Grab a frame at ~0.5s, scale to max 720 width, quality 4 (high)
+        cmd = [
+            "ffmpeg", "-y", "-ss", "00:00:00.500", "-i", in_path,
+            "-vframes", "1", "-vf", "scale='min(720,iw)':-2",
+            "-q:v", "4", out_path,
+        ]
+        subprocess.run(cmd, capture_output=True, timeout=15, check=True)
+        with open(out_path, "rb") as f:
+            data = f.read()
+        try: os.remove(in_path)
+        except Exception: pass
+        try: os.remove(out_path)
+        except Exception: pass
+        return data
+    except Exception as e:
+        log.warning(f"ffmpeg poster failed: {e}")
+        return None
 
 @api.post("/upload")
 async def upload(file: UploadFile = File(...), user=Depends(get_current_user)):
     data = await file.read()
     if len(data) > MAX_UPLOAD:
-        raise HTTPException(413, "Arquivo muito grande (máx. 20MB)")
+        raise HTTPException(413, "Arquivo muito grande (máx. 50MB)")
     fid = str(uuid.uuid4())
+    mime = file.content_type or "application/octet-stream"
     doc = {
         "id": fid, "user_id": user["id"],
         "name": file.filename or "file",
-        "mime": file.content_type or "application/octet-stream",
+        "mime": mime,
         "size": len(data),
         "data_b64": base64.b64encode(data).decode(),
         "created_at": _utcnow().isoformat(),
@@ -331,7 +366,25 @@ async def upload(file: UploadFile = File(...), user=Depends(get_current_user)):
     await db.media_files.insert_one(doc)
     base = os.environ.get("PUBLIC_BACKEND_URL", "")
     url = f"{base}/api/files/{fid}" if base else f"/api/files/{fid}"
-    return {"id": fid, "url": url, "name": doc["name"], "mime": doc["mime"], "size": doc["size"]}
+
+    poster_url = None
+    if mime.startswith("video/"):
+        poster = _extract_video_poster(data)
+        if poster:
+            pid = str(uuid.uuid4())
+            pdoc = {
+                "id": pid, "user_id": user["id"],
+                "name": (file.filename or "video") + "-poster.jpg",
+                "mime": "image/jpeg",
+                "size": len(poster),
+                "data_b64": base64.b64encode(poster).decode(),
+                "created_at": _utcnow().isoformat(),
+                "is_poster_for": fid,
+            }
+            await db.media_files.insert_one(pdoc)
+            poster_url = f"{base}/api/files/{pid}" if base else f"/api/files/{pid}"
+
+    return {"id": fid, "url": url, "name": doc["name"], "mime": doc["mime"], "size": doc["size"], "poster": poster_url}
 
 @api.get("/files/{fid}")
 async def get_file(fid: str):

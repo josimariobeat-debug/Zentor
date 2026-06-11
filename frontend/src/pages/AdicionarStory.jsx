@@ -85,27 +85,13 @@ export default function AdicionarStory() {
         fd.append("file", file);
         const r = await api.post("/upload", fd, { headers: { "Content-Type": "multipart/form-data" } });
         const isVideo = (r.data.mime || "").startsWith("video/");
-        const item = {
+        newItems.push({
           url: r.data.url,
           type: isVideo ? "video" : "image",
           name: r.data.name,
           cover: media.length === 0 && newItems.length === 0,
-          poster: isVideo ? null : r.data.url,
-        };
-        // For videos, generate a poster frame on the client and upload it
-        if (isVideo) {
-          try {
-            const blob = await generateVideoPoster(r.data.url);
-            const pfd = new FormData();
-            const posterName = (r.data.name || "video").replace(/\.[^.]+$/, "") + "-poster.jpg";
-            pfd.append("file", new File([blob], posterName, { type: "image/jpeg" }));
-            const pr = await api.post("/upload", pfd, { headers: { "Content-Type": "multipart/form-data" } });
-            item.poster = pr.data.url;
-          } catch (_) {
-            // poster generation failed; thumbnail will fallback to play icon
-          }
-        }
-        newItems.push(item);
+          poster: r.data.poster || (isVideo ? null : r.data.url),
+        });
         // auto-fill title from first filename if empty
         if (!title.trim() && newItems.length === 1) {
           const baseName = (r.data.name || "").replace(/\.[^.]+$/, "");
@@ -299,7 +285,14 @@ export default function AdicionarStory() {
                       m.poster ? (
                         <img src={m.poster} alt="" className="w-full h-full object-cover"/>
                       ) : (
-                        <video src={m.url} className="w-full h-full object-cover" muted preload="metadata"/>
+                        <video
+                          src={`${m.url}#t=0.1`}
+                          className="w-full h-full object-cover"
+                          muted
+                          playsInline
+                          preload="auto"
+                          onLoadedMetadata={(e)=>{try{e.target.currentTime=0.1;}catch{}}}
+                        />
                       )
                     ) : (
                       <img src={m.url} alt="" className="w-full h-full object-cover"/>
