@@ -1,12 +1,15 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Header, UploadFile, File, Response
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Header, UploadFile, File, Response, Request
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.security import HTTPBearer
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
+import re
 import logging
 import base64
 import uuid
+import mimetypes
 import subprocess
 import tempfile
 from datetime import datetime, timedelta, timezone
@@ -320,47 +323,63 @@ async def toggle_story(sid: str, user=Depends(get_current_user)):
     await db.stories.update_one({"id": sid}, {"$set": {"active": new_active}})
     return {"active": new_active}
 
-# -------- Uploads (stored as base64 in MongoDB) --------
-MAX_UPLOAD = 50 * 1024 * 1024  # 50 MB
+# -------- Uploads (stored on filesystem; metadata in MongoDB) --------
+MAX_UPLOAD = 200 * 1024 * 1024  # 200 MB
+UPLOAD_DIR = ROOT_DIR / "uploads"
+UPLOAD_DIR.mkdir(exist_ok=True)
 
-def _extract_video_poster(video_bytes: bytes) -> Optional[bytes]:
+def _extract_video_poster(video_path_or_bytes) -> Optional[bytes]:
     """Extract a poster JPEG from a video using ffmpeg. Returns None on failure."""
+    in_path = None
+    cleanup_in = False
     try:
-        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as fin:
-            fin.write(video_bytes)
-            in_path = fin.name
+        if isinstance(video_path_or_bytes, (bytes, bytearray)):
+            with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as fin:
+                fin.write(video_path_or_bytes)
+                in_path = fin.name
+                cleanup_in = True
+        else:
+            in_path = str(video_path_or_bytes)
         out_path = in_path + ".jpg"
-        # Grab a frame at ~0.5s, scale to max 720 width, quality 4 (high)
         cmd = [
             "ffmpeg", "-y", "-ss", "00:00:00.500", "-i", in_path,
             "-vframes", "1", "-vf", "scale='min(720,iw)':-2",
             "-q:v", "4", out_path,
         ]
-        subprocess.run(cmd, capture_output=True, timeout=15, check=True)
+        subprocess.run(cmd, capture_output=True, timeout=20, check=True)
         with open(out_path, "rb") as f:
             data = f.read()
-        try: os.remove(in_path)
-        except Exception: pass
         try: os.remove(out_path)
         except Exception: pass
+        if cleanup_in:
+            try: os.remove(in_path)
+            except Exception: pass
         return data
     except Exception as e:
         log.warning(f"ffmpeg poster failed: {e}")
+        if cleanup_in and in_path:
+            try: os.remove(in_path)
+            except Exception: pass
         return None
 
 @api.post("/upload")
 async def upload(file: UploadFile = File(...), user=Depends(get_current_user)):
     data = await file.read()
     if len(data) > MAX_UPLOAD:
-        raise HTTPException(413, "Arquivo muito grande (máx. 50MB)")
+        raise HTTPException(413, "Arquivo muito grande (máx. 200MB)")
     fid = str(uuid.uuid4())
     mime = file.content_type or "application/octet-stream"
+    ext = mimetypes.guess_extension(mime) or os.path.splitext(file.filename or "")[1] or ""
+    file_path = UPLOAD_DIR / f"{fid}{ext}"
+    with open(file_path, "wb") as f:
+        f.write(data)
+
     doc = {
         "id": fid, "user_id": user["id"],
         "name": file.filename or "file",
         "mime": mime,
         "size": len(data),
-        "data_b64": base64.b64encode(data).decode(),
+        "path": str(file_path),
         "created_at": _utcnow().isoformat(),
     }
     await db.media_files.insert_one(doc)
@@ -369,15 +388,18 @@ async def upload(file: UploadFile = File(...), user=Depends(get_current_user)):
 
     poster_url = None
     if mime.startswith("video/"):
-        poster = _extract_video_poster(data)
+        poster = _extract_video_poster(str(file_path))
         if poster:
             pid = str(uuid.uuid4())
+            ppath = UPLOAD_DIR / f"{pid}.jpg"
+            with open(ppath, "wb") as f:
+                f.write(poster)
             pdoc = {
                 "id": pid, "user_id": user["id"],
                 "name": (file.filename or "video") + "-poster.jpg",
                 "mime": "image/jpeg",
                 "size": len(poster),
-                "data_b64": base64.b64encode(poster).decode(),
+                "path": str(ppath),
                 "created_at": _utcnow().isoformat(),
                 "is_poster_for": fid,
             }
@@ -386,12 +408,57 @@ async def upload(file: UploadFile = File(...), user=Depends(get_current_user)):
 
     return {"id": fid, "url": url, "name": doc["name"], "mime": doc["mime"], "size": doc["size"], "poster": poster_url}
 
+
+def _stream_file(path: str, start: int, length: int, chunk_size: int = 64 * 1024):
+    with open(path, "rb") as f:
+        f.seek(start)
+        remaining = length
+        while remaining > 0:
+            chunk = f.read(min(chunk_size, remaining))
+            if not chunk:
+                break
+            remaining -= len(chunk)
+            yield chunk
+
+
 @api.get("/files/{fid}")
-async def get_file(fid: str):
+async def get_file(fid: str, request: Request, range_header: Optional[str] = Header(None, alias="Range")):
     doc = await db.media_files.find_one({"id": fid})
     if not doc:
         raise HTTPException(404, "Arquivo não encontrado")
-    return Response(content=base64.b64decode(doc["data_b64"]), media_type=doc["mime"])
+    mime = doc.get("mime", "application/octet-stream")
+    path = doc.get("path")
+
+    if path and os.path.exists(path):
+        file_size = os.path.getsize(path)
+        # Support byte-range for video streaming (Safari requires it)
+        if range_header:
+            m = re.match(r"bytes=(\d+)-(\d*)", range_header)
+            if m:
+                start = int(m.group(1))
+                end = int(m.group(2)) if m.group(2) else file_size - 1
+                end = min(end, file_size - 1)
+                length = max(0, end - start + 1)
+                return StreamingResponse(
+                    _stream_file(path, start, length),
+                    status_code=206,
+                    media_type=mime,
+                    headers={
+                        "Content-Range": f"bytes {start}-{end}/{file_size}",
+                        "Accept-Ranges": "bytes",
+                        "Content-Length": str(length),
+                        "Cache-Control": "public, max-age=31536000",
+                    },
+                )
+        return FileResponse(
+            path, media_type=mime,
+            headers={"Accept-Ranges": "bytes", "Cache-Control": "public, max-age=31536000"},
+        )
+
+    # Legacy: base64 blob in MongoDB
+    if "data_b64" in doc:
+        return Response(content=base64.b64decode(doc["data_b64"]), media_type=mime)
+    raise HTTPException(404, "Dados do arquivo ausentes")
 
 @api.get("/files")
 async def list_files(user=Depends(get_current_user)):
