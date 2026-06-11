@@ -135,9 +135,20 @@ export default function StoriesVideosApp() {
                   >
                     <div className="w-14 h-20 rounded-lg overflow-hidden bg-neutral-100 relative shrink-0">
                       {s.thumbnail ? (
-                        <img src={s.thumbnail} alt="" className="w-full h-full object-cover" onError={(e)=>{e.target.style.display='none';}}/>
+                        <>
+                          <img src={s.thumbnail} alt="" className="w-full h-full object-cover"/>
+                          {(s.media?.[0]?.type === "video" || s.media?.find(m=>m.cover)?.type === "video") && (
+                            <div className="absolute inset-0 flex items-center justify-center bg-black/15">
+                              <div className="w-7 h-7 rounded-full bg-white/95 flex items-center justify-center">
+                                <Play className="w-3.5 h-3.5 fill-neutral-900 ml-0.5" strokeWidth={0}/>
+                              </div>
+                            </div>
+                          )}
+                        </>
                       ) : (
-                        <div className="w-full h-full flex items-center justify-center"><Play className="w-5 h-5 fill-neutral-400 text-neutral-400" strokeWidth={0}/></div>
+                        <div className="w-full h-full flex items-center justify-center">
+                          <Play className="w-5 h-5 fill-neutral-400 text-neutral-400" strokeWidth={0}/>
+                        </div>
                       )}
                     </div>
                     <div className="flex-1 min-w-0">

@@ -10,7 +10,7 @@ export default function TopBar({ title, backTo, breadcrumb, rightSlot }) {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
   return (
-    <header className="h-[76px] border-b border-neutral-200 bg-white flex items-center justify-between px-10">
+    <header className="sticky top-0 z-40 h-[76px] border-b border-neutral-200 bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/80 flex items-center justify-between px-10">
       <div className="flex items-center gap-3 min-w-0">
         {backTo !== undefined && (
           <button

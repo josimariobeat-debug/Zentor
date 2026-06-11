@@ -17,10 +17,13 @@ import {
   X,
   Music2,
   Pencil,
+  Play,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { api } from "@/lib/api";
+import { generateVideoPoster } from "@/lib/videoPoster";
+import MediaPreviewModal from "@/components/storievideos/MediaPreviewModal";
 
 export default function AdicionarStory() {
   const { appId, storyId } = useParams();
@@ -48,6 +51,7 @@ export default function AdicionarStory() {
   const [uploading, setUploading] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [previewItem, setPreviewItem] = useState(null);
   const [loading, setLoading] = useState(isEdit);
 
   useEffect(() => {
@@ -81,12 +85,27 @@ export default function AdicionarStory() {
         fd.append("file", file);
         const r = await api.post("/upload", fd, { headers: { "Content-Type": "multipart/form-data" } });
         const isVideo = (r.data.mime || "").startsWith("video/");
-        newItems.push({
+        const item = {
           url: r.data.url,
           type: isVideo ? "video" : "image",
           name: r.data.name,
           cover: media.length === 0 && newItems.length === 0,
-        });
+          poster: isVideo ? null : r.data.url,
+        };
+        // For videos, generate a poster frame on the client and upload it
+        if (isVideo) {
+          try {
+            const blob = await generateVideoPoster(r.data.url);
+            const pfd = new FormData();
+            const posterName = (r.data.name || "video").replace(/\.[^.]+$/, "") + "-poster.jpg";
+            pfd.append("file", new File([blob], posterName, { type: "image/jpeg" }));
+            const pr = await api.post("/upload", pfd, { headers: { "Content-Type": "multipart/form-data" } });
+            item.poster = pr.data.url;
+          } catch (_) {
+            // poster generation failed; thumbnail will fallback to play icon
+          }
+        }
+        newItems.push(item);
         // auto-fill title from first filename if empty
         if (!title.trim() && newItems.length === 1) {
           const baseName = (r.data.name || "").replace(/\.[^.]+$/, "");
@@ -270,14 +289,32 @@ export default function AdicionarStory() {
             <div className="grid grid-cols-3 md:grid-cols-4 gap-3">
               {media.map((m, idx) => (
                 <div key={idx} className="group relative aspect-[3/4] rounded-xl overflow-hidden border border-neutral-200 bg-neutral-100">
-                  {m.type === "video" ? (
-                    <video src={m.url} className="w-full h-full object-cover" muted preload="metadata"/>
-                  ) : (
-                    <img src={m.url} alt="" className="w-full h-full object-cover"/>
-                  )}
-                  {m.cover && <span className="absolute top-2 left-2 text-[10px] font-semibold tracking-wider uppercase bg-white/95 text-neutral-900 px-2 py-0.5 rounded">Capa</span>}
-                  {m.type === "video" && <Music2 className="absolute top-2 right-2 w-4 h-4 text-white drop-shadow"/>}
-                  <div className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-1 p-2 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
+                  <button
+                    type="button"
+                    onClick={() => setPreviewItem(m)}
+                    className="absolute inset-0 w-full h-full"
+                    title="Pré-visualizar"
+                  >
+                    {m.type === "video" ? (
+                      m.poster ? (
+                        <img src={m.poster} alt="" className="w-full h-full object-cover"/>
+                      ) : (
+                        <video src={m.url} className="w-full h-full object-cover" muted preload="metadata"/>
+                      )
+                    ) : (
+                      <img src={m.url} alt="" className="w-full h-full object-cover"/>
+                    )}
+                    {m.type === "video" && (
+                      <div className="absolute inset-0 flex items-center justify-center bg-black/15 group-hover:bg-black/30 transition-colors">
+                        <div className="w-12 h-12 rounded-full bg-white/95 text-neutral-900 flex items-center justify-center shadow-lg group-hover:scale-110 transition-transform">
+                          <Play className="w-5 h-5 fill-neutral-900 ml-0.5" strokeWidth={0}/>
+                        </div>
+                      </div>
+                    )}
+                  </button>
+                  {m.cover && <span className="absolute top-2 left-2 text-[10px] font-semibold tracking-wider uppercase bg-amber-300 text-neutral-900 px-2 py-0.5 rounded pointer-events-none z-10">Capa</span>}
+                  {m.type === "video" && <Music2 className="absolute top-2 right-2 w-4 h-4 text-white drop-shadow pointer-events-none z-10"/>}
+                  <div className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-1 p-2 bg-gradient-to-t from-black/70 to-transparent opacity-0 group-hover:opacity-100 transition-opacity z-20">
                     <button onClick={()=>setCover(idx)} title="Definir capa" className="w-7 h-7 rounded-full bg-white/95 text-neutral-900 hover:bg-white flex items-center justify-center"><Star className="w-3.5 h-3.5"/></button>
                     <button onClick={()=>copyLink(m)} title="Copiar link" className="w-7 h-7 rounded-full bg-white/95 text-neutral-900 hover:bg-white flex items-center justify-center"><LinkIcon className="w-3.5 h-3.5"/></button>
                     <button onClick={()=>removeMedia(idx)} title="Remover" className="w-7 h-7 rounded-full bg-white/95 text-red-600 hover:bg-white flex items-center justify-center"><Trash2 className="w-3.5 h-3.5"/></button>
@@ -343,6 +380,8 @@ export default function AdicionarStory() {
           </div>
         </DialogContent>
       </Dialog>
+
+      <MediaPreviewModal open={!!previewItem} onOpenChange={(o)=>!o && setPreviewItem(null)} media={previewItem} />
     </>
   );
 }

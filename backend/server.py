@@ -107,6 +107,7 @@ class MediaItem(BaseModel):
     type: str = "image"
     name: Optional[str] = None
     cover: bool = False
+    poster: Optional[str] = None
 
 class UrlRule(BaseModel):
     value: str
@@ -236,12 +237,17 @@ async def uninstall_app(app_id: str, user=Depends(get_current_user)):
 
 # -------- Stories --------
 def _story_out(s: dict) -> dict:
+    media_list = s.get("media", []) or []
+    cover = next((m for m in media_list if m.get("cover")), media_list[0] if media_list else None)
+    thumbnail = None
+    if cover:
+        thumbnail = cover.get("poster") or (cover.get("url") if cover.get("type") != "video" else None)
     return {
         "id": s["id"], "app_id": s["app_id"], "title": s["title"],
         "format": s.get("format", "vertical"), "scroll": s.get("scroll", "auto"),
         "active": s.get("active", True), "cta": s.get("cta", ""),
-        "media": s.get("media", []), "urls": s.get("urls", []),
-        "thumbnail": next((m["url"] for m in s.get("media", []) if m.get("cover")), (s.get("media") or [{}])[0].get("url")),
+        "media": media_list, "urls": s.get("urls", []),
+        "thumbnail": thumbnail,
         "views": s.get("views", 0),
         "created_at": s.get("created_at"),
     }
