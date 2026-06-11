@@ -25,7 +25,6 @@ const items = [
   { key: "meus-apps", label: "Meus apps", icon: "LayoutGrid", path: "/" },
   { key: "loja", label: "Loja de apps", icon: "Store", path: "/loja" },
   { key: "tutoriais", label: "Tutoriais", icon: "GraduationCap", path: "/tutoriais" },
-  { key: "feedback", label: "Feedback", icon: "MessageSquare", path: "/feedback" },
   { key: "assinaturas", label: "Assinaturas", icon: "CreditCard", path: "/assinaturas" },
   { key: "perfil", label: "Perfil", icon: "User", path: "/perfil" },
 ];

@@ -1,10 +1,9 @@
-import React, { useState, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import TopBar from "@/components/layout/TopBar";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
 import {
   Upload,
   Smartphone,
@@ -16,71 +15,130 @@ import {
   Trash2,
   Plus,
   X,
-  Play,
+  Music2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { api } from "@/lib/api";
 
 export default function AdicionarStory() {
-  const { appId } = useParams();
+  const { appId, storyId } = useParams();
   const navigate = useNavigate();
+  const isEdit = storyId && storyId !== "novo";
+
   const titleRef = useRef(null);
   const mediaRef = useRef(null);
   const urlRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   const [title, setTitle] = useState("");
-  const [format, setFormat] = useState("vertical");
-  const [scroll, setScroll] = useState("auto");
+  const [format, setFormat] = useState("widget");
+  const [scroll, setScroll] = useState("vertical");
+  const [aparencia, setAparencia] = useState("padrao");
   const [active, setActive] = useState(true);
   const [cta, setCta] = useState("");
   const [media, setMedia] = useState([]);
-  const [urls, setUrls] = useState([{ value: "", type: "contem", ignoreParams: false }]);
+  const [urls, setUrls] = useState([{ value: "", type: "contem", ignore_params: false }]);
   const [errors, setErrors] = useState({});
   const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [loading, setLoading] = useState(isEdit);
 
-  const addUrl = () => setUrls([...urls, { value: "", type: "contem", ignoreParams: false }]);
+  useEffect(() => {
+    if (!isEdit) return;
+    api.get(`/stories/${storyId}`)
+      .then(r => {
+        const s = r.data;
+        setTitle(s.title || "");
+        setFormat(s.format || "widget");
+        setScroll(s.scroll || "vertical");
+        setActive(s.active !== false);
+        setCta(s.cta || "");
+        setMedia(s.media || []);
+        setUrls(s.urls?.length ? s.urls : [{ value: "", type: "contem", ignore_params: false }]);
+      })
+      .catch(() => toast.error("Story não encontrado"))
+      .finally(() => setLoading(false));
+  }, [isEdit, storyId]);
+
+  const addUrl = () => setUrls([...urls, { value: "", type: "contem", ignore_params: false }]);
   const removeUrl = (i) => setUrls(urls.filter((_, x) => x !== i));
   const updateUrl = (i, k, v) => setUrls(urls.map((u, x) => (x === i ? { ...u, [k]: v } : u)));
 
-  const onUploadClick = () => {
-    const sample = {
-      id: Date.now(),
-      url: "https://images.unsplash.com/photo-1483985988355-763728e1935b?w=300&h=400&fit=crop",
-      type: "image",
-      name: "capa-colecao.jpg",
-      cover: media.length === 0,
-    };
-    setMedia([...media, sample]);
-    toast.success("Mídia adicionada");
+  const onFilesPicked = async (files) => {
+    if (!files?.length) return;
+    setUploading(true);
+    try {
+      const newItems = [];
+      for (const file of files) {
+        const fd = new FormData();
+        fd.append("file", file);
+        const r = await api.post("/upload", fd, { headers: { "Content-Type": "multipart/form-data" } });
+        const isVideo = (r.data.mime || "").startsWith("video/");
+        newItems.push({
+          url: r.data.url,
+          type: isVideo ? "video" : "image",
+          name: r.data.name,
+          cover: media.length === 0 && newItems.length === 0,
+        });
+        // auto-fill title from first filename if empty
+        if (!title.trim() && newItems.length === 1) {
+          const baseName = (r.data.name || "").replace(/\.[^.]+$/, "");
+          if (baseName) setTitle(baseName);
+        }
+      }
+      setMedia([...media, ...newItems]);
+      toast.success(`${newItems.length} mídia(s) enviada(s)`);
+    } catch (e) {
+      toast.error("Falha no upload");
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
   };
 
-  const setCover = (id) => setMedia(media.map((m) => ({ ...m, cover: m.id === id })));
+  const setCover = (idx) => setMedia(media.map((m, i) => ({ ...m, cover: i === idx })));
   const copyLink = (m) => { navigator.clipboard.writeText(m.url); toast.success("Link copiado"); };
-  const removeMedia = (id) => setMedia(media.filter((m) => m.id !== id));
+  const removeMedia = (idx) => {
+    const next = media.filter((_, i) => i !== idx);
+    if (next.length && !next.some(m => m.cover)) next[0].cover = true;
+    setMedia(next);
+  };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     const e = {};
     if (!title.trim()) e.title = true;
     if (media.length === 0) e.media = true;
-    if (!urls[0].value.trim()) e.url = true;
+    if (!urls[0]?.value?.trim()) e.url = true;
     setErrors(e);
     if (e.title) { titleRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }); return; }
     if (e.media) { mediaRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }); return; }
     if (e.url) { urlRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }); return; }
     setSaving(true);
-    setTimeout(() => {
-      setSaving(false);
-      toast.success("Story salvo com sucesso");
+    try {
+      const payload = { app_id: appId, title, format, scroll, active, cta, media, urls };
+      if (isEdit) await api.put(`/stories/${storyId}`, payload);
+      else await api.post(`/stories`, payload);
+      toast.success(isEdit ? "Story atualizado" : "Story criado");
       navigate(`/app/${appId}`);
-    }, 700);
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || "Falha ao salvar");
+    } finally { setSaving(false); }
   };
+
+  if (loading) return (
+    <>
+      <TopBar title={isEdit ? "Editar story vídeo" : "Adicionar story vídeo"} breadcrumb="Stories Vídeos" backTo={`/app/${appId}`} />
+      <main className="px-10 py-8 max-w-3xl"><div className="text-neutral-500 text-sm">Carregando…</div></main>
+    </>
+  );
 
   return (
     <>
       <TopBar
-        title="Adicionar story vídeo"
+        title={isEdit ? "Editar story vídeo" : "Adicionar story vídeo"}
         breadcrumb="Stories Vídeos"
         backTo={`/app/${appId}`}
         rightSlot={
@@ -107,9 +165,8 @@ export default function AdicionarStory() {
             <Select value={format} onValueChange={setFormat}>
               <SelectTrigger className="h-11 rounded-xl border-neutral-200"><SelectValue/></SelectTrigger>
               <SelectContent>
-                <SelectItem value="vertical">Vertical (9:16)</SelectItem>
-                <SelectItem value="quadrado">Quadrado (1:1)</SelectItem>
-                <SelectItem value="horizontal">Horizontal (16:9)</SelectItem>
+                <SelectItem value="widget">Widget Flutuante</SelectItem>
+                <SelectItem value="carrossel">Carrossel</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -118,11 +175,27 @@ export default function AdicionarStory() {
             <Select value={scroll} onValueChange={setScroll}>
               <SelectTrigger className="h-11 rounded-xl border-neutral-200"><SelectValue/></SelectTrigger>
               <SelectContent>
-                <SelectItem value="auto">Automática</SelectItem>
-                <SelectItem value="manual">Manual</SelectItem>
+                <SelectItem value="vertical">Vertical</SelectItem>
+                <SelectItem value="horizontal">Horizontal</SelectItem>
               </SelectContent>
             </Select>
           </div>
+        </section>
+
+        {/* Aparência */}
+        <section className="bg-white border border-neutral-200 rounded-2xl p-6">
+          <Label>Selecionar aparência</Label>
+          <Select value={aparencia} onValueChange={setAparencia}>
+            <SelectTrigger className="h-11 rounded-xl border-neutral-200"><SelectValue/></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="padrao">Aparência padrão</SelectItem>
+              <SelectItem value="minimal">Minimal</SelectItem>
+              <SelectItem value="circular">Circular</SelectItem>
+              <SelectItem value="quadrada">Quadrada</SelectItem>
+              <SelectItem value="destaque">Destaque (com sombra)</SelectItem>
+            </SelectContent>
+          </Select>
+          <p className="text-[12.5px] text-neutral-500 mt-2">Defina o estilo visual do widget que aparecerá na sua loja.</p>
         </section>
 
         {/* Active */}
@@ -151,8 +224,18 @@ export default function AdicionarStory() {
             </div>
             {errors.media && <span className="text-[12.5px] text-red-600 font-medium">(obrigatório)</span>}
           </div>
+
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*,video/*"
+            multiple
+            className="hidden"
+            onChange={(e)=>onFilesPicked(Array.from(e.target.files || []))}
+          />
+
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
-            <SourceBtn icon={Upload} label="Upload" onClick={onUploadClick}/>
+            <SourceBtn icon={Upload} label={uploading ? "Enviando…" : "Upload"} onClick={() => fileInputRef.current?.click()} disabled={uploading}/>
             <SourceBtn icon={Smartphone} label="Pelo celular" onClick={()=>setMobileOpen(true)}/>
             <SourceBtn icon={Instagram} label="Instagram" onClick={()=>toast.message("Conecte sua conta", { description: "Integração com Instagram em breve." })}/>
             <SourceBtn icon={ImageIcon} label="Galeria" onClick={()=>toast.message("Galeria", { description: "Selecione mídias enviadas anteriormente." })}/>
@@ -160,14 +243,19 @@ export default function AdicionarStory() {
 
           {media.length > 0 && (
             <div className="grid grid-cols-3 md:grid-cols-4 gap-3">
-              {media.map((m) => (
-                <div key={m.id} className="group relative aspect-[3/4] rounded-xl overflow-hidden border border-neutral-200 bg-neutral-100">
-                  <img src={m.url} alt="" className="w-full h-full object-cover"/>
+              {media.map((m, idx) => (
+                <div key={idx} className="group relative aspect-[3/4] rounded-xl overflow-hidden border border-neutral-200 bg-neutral-100">
+                  {m.type === "video" ? (
+                    <video src={m.url} className="w-full h-full object-cover" muted preload="metadata"/>
+                  ) : (
+                    <img src={m.url} alt="" className="w-full h-full object-cover"/>
+                  )}
                   {m.cover && <span className="absolute top-2 left-2 text-[10px] font-semibold tracking-wider uppercase bg-white/95 text-neutral-900 px-2 py-0.5 rounded">Capa</span>}
+                  {m.type === "video" && <Music2 className="absolute top-2 right-2 w-4 h-4 text-white drop-shadow"/>}
                   <div className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-1 p-2 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
-                    <button onClick={()=>setCover(m.id)} title="Definir capa" className="w-7 h-7 rounded-full bg-white/95 text-neutral-900 hover:bg-white flex items-center justify-center"><Star className="w-3.5 h-3.5"/></button>
+                    <button onClick={()=>setCover(idx)} title="Definir capa" className="w-7 h-7 rounded-full bg-white/95 text-neutral-900 hover:bg-white flex items-center justify-center"><Star className="w-3.5 h-3.5"/></button>
                     <button onClick={()=>copyLink(m)} title="Copiar link" className="w-7 h-7 rounded-full bg-white/95 text-neutral-900 hover:bg-white flex items-center justify-center"><LinkIcon className="w-3.5 h-3.5"/></button>
-                    <button onClick={()=>removeMedia(m.id)} title="Remover" className="w-7 h-7 rounded-full bg-white/95 text-red-600 hover:bg-white flex items-center justify-center"><Trash2 className="w-3.5 h-3.5"/></button>
+                    <button onClick={()=>removeMedia(idx)} title="Remover" className="w-7 h-7 rounded-full bg-white/95 text-red-600 hover:bg-white flex items-center justify-center"><Trash2 className="w-3.5 h-3.5"/></button>
                   </div>
                 </div>
               ))}
@@ -238,9 +326,9 @@ function Label({ children, className="" }) {
   return <label className={`text-[14px] font-medium text-neutral-800 block mb-2 ${className}`}>{children}</label>;
 }
 
-function SourceBtn({ icon: Icon, label, onClick }) {
+function SourceBtn({ icon: Icon, label, onClick, disabled }) {
   return (
-    <button onClick={onClick} className="flex flex-col items-center gap-2 p-4 border border-neutral-200 rounded-xl hover:border-neutral-400 hover:bg-neutral-50 transition-all">
+    <button disabled={disabled} onClick={onClick} className="flex flex-col items-center gap-2 p-4 border border-neutral-200 rounded-xl hover:border-neutral-400 hover:bg-neutral-50 disabled:opacity-50 transition-all">
       <Icon className="w-5 h-5 text-neutral-700" strokeWidth={1.75}/>
       <span className="text-[13px] font-medium text-neutral-700">{label}</span>
     </button>

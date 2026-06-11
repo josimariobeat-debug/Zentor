@@ -1,10 +1,11 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import TopBar from "@/components/layout/TopBar";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
-import { sampleStories } from "@/mock";
+import { Skeleton } from "@/components/ui/skeleton";
+import { api } from "@/lib/api";
 import {
   Search,
   Plus,
@@ -13,45 +14,51 @@ import {
   Trash2,
   Eye,
   Play,
-  Image as ImageIcon,
-  LayoutDashboard,
-  ShoppingBag,
-  Ruler,
-  MessageSquare,
-  Settings,
-  Link as LinkIcon,
-  Palette,
-  Film,
 } from "lucide-react";
 import { toast } from "sonner";
 
 const TABS = [
-  { value: "stories", label: "Stories", icon: Film },
-  { value: "midias", label: "Mídias", icon: ImageIcon },
-  { value: "aparencia", label: "Aparência", icon: Palette },
-  { value: "dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { value: "produtos", label: "Produtos", icon: ShoppingBag },
-  { value: "medidas", label: "Medidas", icon: Ruler },
-  { value: "comentarios", label: "Comentários", icon: MessageSquare },
-  { value: "config", label: "Configurações", icon: Settings },
-  { value: "integracao", label: "Integração", icon: LinkIcon },
+  { value: "stories", label: "Stories" },
+  { value: "midias", label: "Mídias" },
+  { value: "aparencia", label: "Aparência" },
+  { value: "dashboard", label: "Dashboard" },
+  { value: "produtos", label: "Produtos" },
+  { value: "medidas", label: "Medidas" },
+  { value: "comentarios", label: "Comentários" },
+  { value: "config", label: "Configurações" },
+  { value: "integracao", label: "Integração" },
 ];
 
 export default function StoriesVideosApp() {
   const navigate = useNavigate();
   const { appId } = useParams();
-  const [stories, setStories] = useState(sampleStories);
+  const [stories, setStories] = useState(null);
   const [search, setSearch] = useState("");
   const [widget, setWidget] = useState(true);
   const [carrossel, setCarrossel] = useState(false);
 
-  const filtered = stories.filter((s) => s.title.toLowerCase().includes(search.toLowerCase()));
+  const load = () =>
+    api.get(`/stories`, { params: { app_id: appId } })
+      .then(r => setStories(r.data))
+      .catch(() => setStories([]));
 
-  const remove = (id) => {
-    setStories((s) => s.filter((x) => x.id !== id));
-    toast.success("Story removido");
+  useEffect(() => { load(); }, [appId]);
+
+  const filtered = (stories || []).filter((s) => s.title.toLowerCase().includes(search.toLowerCase()));
+
+  const remove = async (id) => {
+    try {
+      await api.delete(`/stories/${id}`);
+      toast.success("Story removido");
+      setStories((s) => s.filter((x) => x.id !== id));
+    } catch { toast.error("Falha ao remover"); }
   };
-  const toggle = (id) => setStories((s) => s.map((x) => (x.id === id ? { ...x, active: !x.active } : x)));
+  const toggle = async (id) => {
+    try {
+      const r = await api.patch(`/stories/${id}/toggle`);
+      setStories((s) => s.map((x) => (x.id === id ? { ...x, active: r.data.active } : x)));
+    } catch { toast.error("Falha ao alterar"); }
+  };
 
   return (
     <>
@@ -62,31 +69,27 @@ export default function StoriesVideosApp() {
       />
       <main className="px-10 py-8 fade-in">
         <Tabs defaultValue="stories">
-          <TabsList className="flex w-full justify-start gap-1 bg-transparent p-0 mb-8 border-b border-neutral-200 rounded-none h-auto overflow-x-auto">
-            {TABS.map((t) => {
-              const Icon = t.icon;
-              return (
-                <TabsTrigger
-                  key={t.value}
-                  value={t.value}
-                  className="flex items-center gap-2 px-4 py-3 text-[13.5px] font-medium text-neutral-500 data-[state=active]:text-neutral-900 data-[state=active]:bg-transparent data-[state=active]:shadow-none border-b-2 border-transparent data-[state=active]:border-neutral-900 rounded-none transition-colors"
-                >
-                  <Icon className="w-4 h-4" strokeWidth={1.75} />
-                  {t.label}
-                </TabsTrigger>
-              );
-            })}
+          <TabsList className="flex w-full justify-start gap-7 bg-transparent p-0 mb-9 border-b border-neutral-200 rounded-none h-auto overflow-x-auto">
+            {TABS.map((t) => (
+              <TabsTrigger
+                key={t.value}
+                value={t.value}
+                className="px-0 pb-3 pt-1 text-[14px] font-medium text-neutral-400 hover:text-neutral-700 data-[state=active]:text-neutral-900 data-[state=active]:bg-transparent data-[state=active]:shadow-none border-b-2 border-transparent data-[state=active]:border-neutral-900 rounded-none transition-colors -mb-px"
+              >
+                {t.label}
+              </TabsTrigger>
+            ))}
           </TabsList>
 
           {/* Stories tab */}
           <TabsContent value="stories" className="mt-0">
             <div className="flex items-center gap-8 mb-7">
               <div className="flex items-center gap-2.5">
-                <Switch checked={widget} onCheckedChange={setWidget} />
+                <Switch checked={widget} onCheckedChange={(v) => { setWidget(v); if (v) setCarrossel(false); }} />
                 <label className="text-[14px] font-medium text-neutral-700">Widget Flutuante</label>
               </div>
               <div className="flex items-center gap-2.5">
-                <Switch checked={carrossel} onCheckedChange={setCarrossel} />
+                <Switch checked={carrossel} onCheckedChange={(v) => { setCarrossel(v); if (v) setWidget(false); }} />
                 <label className="text-[14px] font-medium text-neutral-700">Carrossel</label>
               </div>
             </div>
@@ -117,9 +120,11 @@ export default function StoriesVideosApp() {
               </div>
             </div>
 
-            {filtered.length === 0 ? (
+            {stories === null ? (
+              <div className="space-y-2">{[1,2,3].map(i => <Skeleton key={i} className="h-[92px] rounded-2xl"/>)}</div>
+            ) : filtered.length === 0 ? (
               <div className="border border-dashed border-neutral-300 rounded-2xl p-16 text-center text-neutral-500">
-                Nenhum story encontrado.
+                Nenhum story criado ainda. Clique em <b className="text-neutral-700">Adicionar</b> para criar o primeiro.
               </div>
             ) : (
               <div className="bg-white border border-neutral-200 rounded-2xl overflow-hidden">
@@ -129,34 +134,23 @@ export default function StoriesVideosApp() {
                     className={`flex items-center gap-4 px-5 py-4 ${idx !== filtered.length - 1 ? "border-b border-neutral-100" : ""}`}
                   >
                     <div className="w-14 h-20 rounded-lg overflow-hidden bg-neutral-100 relative shrink-0">
-                      <img src={s.thumbnail} alt="" className="w-full h-full object-cover" />
-                      {s.format === "video" && (
-                        <div className="absolute inset-0 flex items-center justify-center bg-black/20">
-                          <Play className="w-5 h-5 fill-white text-white" strokeWidth={0}/>
-                        </div>
+                      {s.thumbnail ? (
+                        <img src={s.thumbnail} alt="" className="w-full h-full object-cover" onError={(e)=>{e.target.style.display='none';}}/>
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center"><Play className="w-5 h-5 fill-neutral-400 text-neutral-400" strokeWidth={0}/></div>
                       )}
                     </div>
                     <div className="flex-1 min-w-0">
                       <h4 className="text-[14.5px] font-semibold text-neutral-900">{s.title}</h4>
                       <div className="flex items-center gap-3 mt-1 text-[12.5px] text-neutral-500">
-                        <span className="flex items-center gap-1"><Eye className="w-3.5 h-3.5"/> {s.views.toLocaleString("pt-BR")} visualizações</span>
-                        <span className="uppercase tracking-wider font-semibold text-[10px] bg-neutral-100 text-neutral-700 px-2 py-0.5 rounded">{s.format}</span>
+                        <span className="flex items-center gap-1"><Eye className="w-3.5 h-3.5"/> {(s.views||0).toLocaleString("pt-BR")} visualizações</span>
+                        {s.format && <span className="uppercase tracking-wider font-semibold text-[10px] bg-neutral-100 text-neutral-700 px-2 py-0.5 rounded">{s.format}</span>}
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
                       <Switch checked={s.active} onCheckedChange={() => toggle(s.id)} />
-                      <button
-                        onClick={() => navigate(`/app/${appId}/story/${s.id}`)}
-                        className="w-9 h-9 rounded-lg hover:bg-neutral-100 flex items-center justify-center text-neutral-700 transition-colors"
-                      >
-                        <Edit2 className="w-4 h-4" />
-                      </button>
-                      <button
-                        onClick={() => remove(s.id)}
-                        className="w-9 h-9 rounded-lg hover:bg-red-50 hover:text-red-600 flex items-center justify-center text-neutral-700 transition-colors"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      <button onClick={() => navigate(`/app/${appId}/story/${s.id}`)} className="w-9 h-9 rounded-lg hover:bg-neutral-100 flex items-center justify-center text-neutral-700 transition-colors"><Edit2 className="w-4 h-4" /></button>
+                      <button onClick={() => remove(s.id)} className="w-9 h-9 rounded-lg hover:bg-red-50 hover:text-red-600 flex items-center justify-center text-neutral-700 transition-colors"><Trash2 className="w-4 h-4" /></button>
                     </div>
                   </div>
                 ))}
@@ -166,7 +160,7 @@ export default function StoriesVideosApp() {
 
           {TABS.filter(t => t.value !== "stories").map((t) => (
             <TabsContent key={t.value} value={t.value} className="mt-0">
-              <PlaceholderTab label={t.label} Icon={t.icon} />
+              <PlaceholderTab label={t.label} />
             </TabsContent>
           ))}
         </Tabs>
@@ -175,12 +169,9 @@ export default function StoriesVideosApp() {
   );
 }
 
-function PlaceholderTab({ label, Icon }) {
+function PlaceholderTab({ label }) {
   return (
     <div className="bg-white border border-neutral-200 rounded-2xl p-16 text-center">
-      <div className="w-14 h-14 rounded-2xl bg-neutral-100 flex items-center justify-center mx-auto mb-5">
-        <Icon className="w-6 h-6 text-neutral-500" strokeWidth={1.75}/>
-      </div>
       <h3 className="text-[16px] font-semibold text-neutral-900">{label}</h3>
       <p className="text-[14px] text-neutral-500 mt-1">Esta seção será personalizada para o seu fluxo.</p>
     </div>
