@@ -470,6 +470,116 @@ async def list_files(user=Depends(get_current_user)):
         out.append({"id": it["id"], "url": url, "name": it["name"], "mime": it["mime"], "size": it["size"]})
     return out
 
+# -------- Mobile Upload Sessions (QR Code flow) --------
+UPLOAD_SESSION_TTL = timedelta(minutes=15)
+
+class UploadSessionOut(BaseModel):
+    sessionId: str
+    expiresAt: str
+    mobileUrl: str
+
+def _public_base() -> str:
+    return os.environ.get("PUBLIC_BACKEND_URL", "").rstrip("/")
+
+@api.post("/upload-sessions")
+async def create_upload_session(user=Depends(get_current_user)):
+    sid = str(uuid.uuid4())
+    expires_at = _utcnow() + UPLOAD_SESSION_TTL
+    doc = {
+        "id": sid, "user_id": user["id"],
+        "status": "active",
+        "created_at": _utcnow().isoformat(),
+        "expires_at": expires_at.isoformat(),
+    }
+    await db.upload_sessions.insert_one(doc)
+    base = _public_base()
+    return {
+        "sessionId": sid,
+        "expiresAt": expires_at.isoformat(),
+        "mobileUrl": f"{base}/mobile-upload/{sid}" if base else f"/mobile-upload/{sid}",
+    }
+
+async def _get_session(sid: str):
+    s = await db.upload_sessions.find_one({"id": sid})
+    if not s:
+        raise HTTPException(404, "Sessão não encontrada")
+    try:
+        exp = datetime.fromisoformat(s["expires_at"])
+    except Exception:
+        exp = _utcnow() - timedelta(seconds=1)
+    if s.get("status") != "active" or exp < _utcnow():
+        raise HTTPException(410, "Sessão expirada")
+    return s
+
+@api.get("/upload-sessions/{sid}")
+async def check_session(sid: str):
+    s = await _get_session(sid)
+    return {"ok": True, "expiresAt": s["expires_at"]}
+
+@api.post("/upload-sessions/{sid}/files")
+async def upload_to_session(sid: str, file: UploadFile = File(...)):
+    s = await _get_session(sid)
+    data = await file.read()
+    if len(data) > MAX_UPLOAD:
+        raise HTTPException(413, "Arquivo muito grande (máx. 200MB)")
+    fid = str(uuid.uuid4())
+    mime = file.content_type or "application/octet-stream"
+    ext = mimetypes.guess_extension(mime) or os.path.splitext(file.filename or "")[1] or ""
+    file_path = UPLOAD_DIR / f"{fid}{ext}"
+    with open(file_path, "wb") as f:
+        f.write(data)
+    doc = {
+        "id": fid, "user_id": s["user_id"],
+        "name": file.filename or "file",
+        "mime": mime, "size": len(data),
+        "path": str(file_path),
+        "created_at": _utcnow().isoformat(),
+        "session_id": sid,
+    }
+    await db.media_files.insert_one(doc)
+
+    base = _public_base()
+    url = f"{base}/api/files/{fid}" if base else f"/api/files/{fid}"
+    poster_url = None
+    if mime.startswith("video/"):
+        poster = _extract_video_poster(str(file_path))
+        if poster:
+            pid = str(uuid.uuid4())
+            ppath = UPLOAD_DIR / f"{pid}.jpg"
+            with open(ppath, "wb") as f:
+                f.write(poster)
+            await db.media_files.insert_one({
+                "id": pid, "user_id": s["user_id"],
+                "name": (file.filename or "video") + "-poster.jpg",
+                "mime": "image/jpeg", "size": len(poster),
+                "path": str(ppath),
+                "created_at": _utcnow().isoformat(),
+                "is_poster_for": fid,
+                "session_id": sid,
+            })
+            poster_url = f"{base}/api/files/{pid}" if base else f"/api/files/{pid}"
+
+    await db.upload_sessions.update_one(
+        {"id": sid},
+        {"$push": {"files": {"id": fid, "url": url, "poster": poster_url,
+                              "name": doc["name"], "mime": mime, "size": len(data),
+                              "type": "video" if mime.startswith("video/") else ("image" if mime.startswith("image/") else "file"),
+                              "uploaded_at": _utcnow().isoformat()}}}
+    )
+    return {"id": fid, "url": url, "poster": poster_url, "name": doc["name"], "mime": mime, "size": len(data)}
+
+@api.get("/upload-sessions/{sid}/files")
+async def list_session_files(sid: str, user=Depends(get_current_user)):
+    s = await db.upload_sessions.find_one({"id": sid, "user_id": user["id"]})
+    if not s:
+        raise HTTPException(404, "Sessão não encontrada")
+    return {"files": s.get("files", []), "status": s.get("status", "active"), "expiresAt": s.get("expires_at")}
+
+@api.delete("/upload-sessions/{sid}")
+async def close_session(sid: str, user=Depends(get_current_user)):
+    await db.upload_sessions.update_one({"id": sid, "user_id": user["id"]}, {"$set": {"status": "closed"}})
+    return {"ok": True}
+
 # -------- Subscriptions --------
 @api.get("/subscriptions")
 async def list_subs(user=Depends(get_current_user)):
