@@ -6,6 +6,7 @@ import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
+import MediaPreviewModal from "@/components/storievideos/MediaPreviewModal";
 import {
   Search,
   Plus,
